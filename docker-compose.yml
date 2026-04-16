@@ -1,0 +1,263 @@
+x-spark-common: &spark-common
+  build:
+    context: ./spark
+    dockerfile: Dockerfile
+  image: chess-spark:${SPARK_IMAGE_TAG}
+  restart: unless-stopped
+  networks:
+    - chess-net
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:${CP_VERSION}
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT}
+      ZOOKEEPER_TICK_TIME: ${ZOOKEEPER_TICK_TIME}
+    ports:
+      - "${ZOOKEEPER_CLIENT_PORT}:${ZOOKEEPER_CLIENT_PORT}"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    networks:
+      - chess-net
+
+  kafka:
+    image: confluentinc/cp-kafka:${CP_VERSION}
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_started
+    environment:
+      KAFKA_BROKER_ID: ${KAFKA_BROKER_ID}
+      KAFKA_ZOOKEEPER_CONNECT: ${KAFKA_ZOOKEEPER_CONNECT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:${KAFKA_INTERNAL_PORT},PLAINTEXT_HOST://0.0.0.0:${KAFKA_EXTERNAL_PORT}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:${KAFKA_INTERNAL_PORT},PLAINTEXT_HOST://localhost:${KAFKA_EXTERNAL_PORT}
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR}
+    ports:
+      - "${KAFKA_EXTERNAL_PORT}:${KAFKA_EXTERNAL_PORT}"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:${KAFKA_INTERNAL_PORT} > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - chess-net
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: chess-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:${KAFKA_INTERNAL_PORT}
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:${ZOOKEEPER_CLIENT_PORT}
+    ports:
+      - "${KAFKA_UI_PORT}:${KAFKA_UI_CONTAINER_PORT}"
+    networks:
+      - chess-net
+
+  spark-master:
+    <<: *spark-common
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_PORT: ${SPARK_MASTER_PORT}
+      SPARK_MASTER_WEBUI_PORT: ${SPARK_MASTER_WEBUI_PORT}
+    ports:
+      - "${SPARK_MASTER_PORT}:${SPARK_MASTER_PORT}"
+      - "${SPARK_MASTER_WEBUI_PORT}:${SPARK_MASTER_WEBUI_PORT}"
+
+  spark-worker-1:
+    <<: *spark-common
+    depends_on:
+      spark-master:
+        condition: service_started
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:${SPARK_MASTER_PORT}
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_WEBUI_PORT: ${SPARK_WORKER_WEBUI_PORT_1}
+    ports:
+      - "${SPARK_WORKER_WEBUI_PORT_1}:${SPARK_WORKER_WEBUI_PORT_1}"
+
+  spark-worker-2:
+    <<: *spark-common
+    depends_on:
+      spark-master:
+        condition: service_started
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:${SPARK_MASTER_PORT}
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_WEBUI_PORT: ${SPARK_WORKER_WEBUI_PORT_2}
+    ports:
+      - "${SPARK_WORKER_WEBUI_PORT_2}:${SPARK_WORKER_WEBUI_PORT_2}"
+
+  cassandra:
+    image: cassandra:${CASSANDRA_VERSION}
+    restart: unless-stopped
+    ports:
+      - "${CASSANDRA_PORT}:${CASSANDRA_PORT}"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./storage/cassandra/init.cql:/init.cql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh localhost ${CASSANDRA_PORT} -e 'DESCRIBE KEYSPACES' > /dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 40s
+    networks:
+      - chess-net
+
+  cassandra-init:
+    image: cassandra:${CASSANDRA_VERSION}
+    restart: unless-stopped
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    command: >
+      /bin/sh -c "cqlsh cassandra ${CASSANDRA_PORT} -f /init.cql &&
+      echo 'Cassandra schema initialized.' && tail -f /dev/null"
+    volumes:
+      - ./storage/cassandra/init.cql:/init.cql:ro
+    networks:
+      - chess-net
+
+  postgres:
+    image: postgres:${POSTGRES_VERSION}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_INTERNAL_PORT}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./storage/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -p ${POSTGRES_INTERNAL_PORT}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - chess-net
+
+  metabase-db:
+    image: postgres:${POSTGRES_VERSION}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MB_DB_USER}
+      POSTGRES_PASSWORD: ${MB_DB_PASS}
+      POSTGRES_DB: ${MB_DB_DBNAME}
+    volumes:
+      - metabase_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MB_DB_USER} -d ${MB_DB_DBNAME} -p ${MB_DB_PORT}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - chess-net
+
+  elasticsearch:
+    image: elasticsearch:${ELASTIC_VERSION}
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS}
+      http.port: ${ELASTICSEARCH_PORT}
+    ports:
+      - "${ELASTICSEARCH_PORT}:${ELASTICSEARCH_PORT}"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${ELASTICSEARCH_PORT}/_cluster/health > /dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 40s
+    networks:
+      - chess-net
+
+  kibana:
+    image: kibana:${KIBANA_VERSION}
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:${ELASTICSEARCH_PORT}
+      SERVER_PORT: ${KIBANA_PORT}
+    ports:
+      - "${KIBANA_PORT}:${KIBANA_PORT}"
+    networks:
+      - chess-net
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_SERVER_HTTP_PORT: ${GRAFANA_PORT}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+    ports:
+      - "${GRAFANA_PORT}:${GRAFANA_PORT}"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./visualization/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - chess-net
+
+  metabase:
+    image: metabase/metabase:${METABASE_VERSION}
+    restart: unless-stopped
+    depends_on:
+      metabase-db:
+        condition: service_healthy
+    environment:
+      MB_JETTY_PORT: ${METABASE_PORT}
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: ${MB_DB_HOST}
+      MB_DB_PORT: ${MB_DB_PORT}
+      MB_DB_DBNAME: ${MB_DB_DBNAME}
+      MB_DB_USER: ${MB_DB_USER}
+      MB_DB_PASS: ${MB_DB_PASS}
+    ports:
+      - "${METABASE_PORT}:${METABASE_PORT}"
+    networks:
+      - chess-net
+
+volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
+  cassandra_data:
+  postgres_data:
+  metabase_db_data:
+  elasticsearch_data:
+  grafana_data:
+
+networks:
+  chess-net:
+    driver: bridge
