@@ -33,3 +33,19 @@ CREATE TABLE IF NOT EXISTS bot_scores (
     flagged boolean,
     PRIMARY KEY (player_id, window_start)
 ) WITH CLUSTERING ORDER BY (window_start DESC);
+
+-- live tournament standings; per-tournament partition, clustered by player_id.
+-- Points is a regular column (mutable) so streaming upserts overwrite cleanly.
+-- Top-of-leaderboard queries read the whole partition and sort client-side
+-- (tournaments rarely exceed ~1000 players).
+CREATE TABLE IF NOT EXISTS tournament_standings (
+    tournament_id text,
+    player_id text,
+    points float,
+    games_played int,
+    wins int,
+    draws int,
+    losses int,
+    last_updated timestamp,
+    PRIMARY KEY (tournament_id, player_id)
+);

@@ -36,7 +36,7 @@
           },
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT COALESCE(SUM(total_games), 0) AS total_games_processed FROM openings;"
+          "rawSql": "SELECT COALESCE(COUNT(*) / 2, 0) AS total_games_processed FROM elo_history;"
         }
       ],
       "options": {

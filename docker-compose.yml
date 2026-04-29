@@ -4,6 +4,8 @@ x-spark-common: &spark-common
     dockerfile: Dockerfile
   image: chess-spark:${SPARK_IMAGE_TAG}
   restart: unless-stopped
+  volumes:
+    - ./:/opt/spark-apps:ro
   networks:
     - chess-net
 

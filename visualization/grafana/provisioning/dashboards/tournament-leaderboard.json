@@ -1,0 +1,182 @@
+{
+  "uid": "tournament-leaderboard",
+  "title": "Tournament Leaderboard",
+  "tags": ["chess", "stream", "tournament"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "2016-01-31T21:00:00Z",
+    "to": "2016-01-31T23:30:00Z"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "tournament",
+        "label": "Tournament",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "chessdb-postgres"
+        },
+        "refresh": 2,
+        "query": "SELECT tournament_id AS __value, tournament_id || ' (' || COUNT(DISTINCT player_id) || ' players)' AS __text FROM tournament_leaderboard GROUP BY tournament_id ORDER BY MAX(last_updated) DESC LIMIT 50",
+        "current": {},
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Top 20 standings",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 14, "w": 14, "x": 0, "y": 0 },
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Points" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "color", "value": { "mode": "continuous-GrYlRd" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT RANK() OVER (ORDER BY points DESC, wins DESC) AS \"Rank\", player_id AS \"Player\", points AS \"Points\", games_played AS \"Games\", wins AS \"W\", draws AS \"D\", losses AS \"L\", last_updated AS \"Last\" FROM tournament_leaderboard WHERE tournament_id = '$tournament' ORDER BY points DESC, wins DESC LIMIT 20"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Players in tournament",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 7, "w": 5, "x": 14, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT player_id) AS players FROM tournament_leaderboard WHERE tournament_id = '$tournament'"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Total games",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 7, "w": 5, "x": 19, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT (SUM(games_played) / 2)::int AS games FROM tournament_leaderboard WHERE tournament_id = '$tournament'"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Leader ahead by",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 7, "w": 10, "x": 14, "y": 7 },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "decimals": 1 }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ranked AS (SELECT points, ROW_NUMBER() OVER (ORDER BY points DESC) AS rk FROM tournament_leaderboard WHERE tournament_id = '$tournament') SELECT (MAX(CASE WHEN rk = 1 THEN points END) - MAX(CASE WHEN rk = 2 THEN points END))::float AS gap FROM ranked"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Points distribution",
+      "type": "histogram",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 14 },
+      "options": {
+        "bucketSize": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT points AS value FROM tournament_leaderboard WHERE tournament_id = '$tournament'"
+        }
+      ]
+    }
+  ]
+}

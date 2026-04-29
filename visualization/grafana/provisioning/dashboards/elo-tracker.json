@@ -1,0 +1,136 @@
+{
+  "uid": "elo-tracker",
+  "title": "ELO Tracker",
+  "tags": ["chess", "stream", "elo"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "time": {
+    "from": "2016-01-31T21:30:00Z",
+    "to": "2016-01-31T23:00:00Z"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "player",
+        "label": "Player",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "chessdb-postgres"
+        },
+        "refresh": 2,
+        "query": "SELECT DISTINCT player_id FROM elo_history ORDER BY 1 LIMIT 200",
+        "multi": true,
+        "includeAll": false,
+        "current": {},
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "ELO over time",
+      "type": "timeseries",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "chessdb-postgres"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT recorded_at AS time, elo AS value, player_id AS metric FROM elo_history WHERE player_id IN ($player) AND $__timeFilter(recorded_at) ORDER BY recorded_at"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Total ELO updates",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS total FROM elo_history"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Distinct players tracked",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 12 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT player_id) AS players FROM elo_history"
+        }
+      ]
+    }
+  ]
+}

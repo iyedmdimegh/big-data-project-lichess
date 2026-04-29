@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe -c \"import kafka, chess, zstandard; print\\('OK'\\)\")",
+      "PowerShell(docker exec big-data-project-lichess-kafka-1 kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka:9092 --topic game-results)",
+      "PowerShell(docker exec big-data-project-lichess-spark-master-1 sh -c \"ls /tmp/checkpoints/elo_tracker/ 2>/dev/null; ls /tmp/checkpoints/elo_tracker/offsets/ 2>/dev/null\")",
+      "PowerShell(curl.exe -s -u admin:admin123 \"http://localhost:3000/api/search?type=dash-db&query=ELO\")",
+      "PowerShell(curl.exe -s -u admin:admin123 -H \"Content-Type: application/json\" -X POST \"http://localhost:3000/api/ds/query\" -d $body)",
+      "PowerShell(curl.exe -s -u admin:admin123 \"http://localhost:3000/api/datasources/uid/chessdb-postgres\")",
+      "PowerShell(curl.exe -s -u admin:admin123 \"http://localhost:3000/api/datasources\")",
+      "PowerShell($d = curl.exe -s -u admin:admin123 \"http://localhost:3000/api/dashboards/uid/elo-tracker\" | ConvertFrom-Json; \"title=$\\($d.dashboard.title\\) version=$\\($d.dashboard.version\\) panels=$\\($d.dashboard.panels.Count\\)\")",
+      "PowerShell(docker exec big-data-project-lichess-spark-master-1 sh -c \"ps -ef | grep -E 'elo_tracker|opening_trends' | grep -v grep | wc -l\")",
+      "PowerShell(docker exec big-data-project-lichess-spark-master-1 sh -c \"rm -rf /tmp/checkpoints/elo_tracker /tmp/checkpoints/opening_trends /tmp/elo_tracker.log /tmp/opening_trends.log\")",
+      "PowerShell(docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c \"SELECT eco, opening_name, SUM\\(game_count\\) AS total FROM opening_trends GROUP BY eco, opening_name ORDER BY total DESC LIMIT 8;\")",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m ingestion.stream_producer.main --bootstrap localhost:29092 --max-reconnects 0 2>&1)",
+      "PowerShell(docker compose ps --format \"table {{.Service}}\\\\t{{.Status}}\")",
+      "PowerShell(docker exec big-data-project-lichess-spark-master-1 sh -c \"ps -ef | grep -v grep | grep -E 'elo_tracker.py|opening_trends.py|leaderboard.py' | wc -l\")",
+      "PowerShell(docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 --list)"
+    ]
+  }
+}

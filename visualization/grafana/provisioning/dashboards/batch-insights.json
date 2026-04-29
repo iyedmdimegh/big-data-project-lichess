@@ -1,0 +1,170 @@
+{
+  "uid": "batch-insights",
+  "title": "Batch Insights",
+  "tags": ["chess", "batch", "ml"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "",
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "player",
+        "label": "Player",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "chessdb-postgres"
+        },
+        "refresh": 2,
+        "query": "SELECT player_id FROM als_vectors ORDER BY player_id LIMIT 500",
+        "current": {},
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Opening clusters (K-Means k=5)",
+      "type": "piechart",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "hideFrom": { "tooltip": false, "viz": false, "legend": false } }
+        }
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": ["name", "value"],
+        "legend": { "displayMode": "list", "placement": "right", "showLegend": true, "values": ["value"] },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT cluster_label AS \"Cluster\", COUNT(*)::int AS \"ECOs\" FROM opening_clusters GROUP BY cluster_label ORDER BY 2 DESC"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Sample ECOs per cluster",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ranked AS (SELECT cluster_label, eco_code, ROW_NUMBER() OVER (PARTITION BY cluster_label ORDER BY random()) rk FROM opening_clusters) SELECT cluster_label AS \"Cluster\", string_agg(eco_code, ', ' ORDER BY eco_code) AS \"Sample ECOs\" FROM ranked WHERE rk <= 6 GROUP BY cluster_label ORDER BY cluster_label"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Player aggression index distribution",
+      "type": "histogram",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "options": { "bucketSize": 0.05 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT aggression_index AS value FROM player_styles WHERE aggression_index IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Most aggressive players (top 15)",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT player_id AS \"Player\", aggression_index::numeric(4,3) AS \"Aggression\" FROM player_styles WHERE aggression_index IS NOT NULL ORDER BY aggression_index DESC LIMIT 15"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Recommendations for $player",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 18 },
+      "options": { "showHeader": true },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Score" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "color", "value": { "mode": "continuous-BlYlRd" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT (rec->>'eco') AS \"ECO\", oc.cluster_label AS \"Cluster\", (rec->>'score')::numeric(6,3) AS \"Score\" FROM als_vectors v, jsonb_array_elements(v.factors) AS rec LEFT JOIN opening_clusters oc ON oc.eco_code = rec->>'eco' WHERE v.player_id = '$player' ORDER BY (rec->>'score')::float DESC"
+        }
+      ]
+    }
+  ]
+}

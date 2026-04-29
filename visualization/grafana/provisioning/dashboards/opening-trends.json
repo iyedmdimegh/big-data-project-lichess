@@ -1,0 +1,156 @@
+{
+  "uid": "opening-trends",
+  "title": "Opening Trends",
+  "tags": ["chess", "stream", "openings"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "2016-01-31T21:30:00Z",
+    "to": "2016-01-31T23:00:00Z"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "topn",
+        "label": "Top N",
+        "type": "custom",
+        "query": "5,10,15,20",
+        "current": { "text": "10", "value": "10" },
+        "options": [
+          { "text": "5",  "value": "5"  },
+          { "text": "10", "value": "10", "selected": true },
+          { "text": "15", "value": "15" },
+          { "text": "20", "value": "20" }
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Top openings per 5-min window",
+      "type": "timeseries",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH ranked AS (SELECT window_start, eco, opening_name, game_count, ROW_NUMBER() OVER (PARTITION BY window_start ORDER BY game_count DESC) AS rk FROM opening_trends WHERE $__timeFilter(window_start)) SELECT window_start AS time, game_count AS value, COALESCE(opening_name, eco) || ' (' || eco || ')' AS metric FROM ranked WHERE rk <= $topn ORDER BY window_start, rk"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Total tracked windows",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT window_start) AS windows FROM opening_trends WHERE $__timeFilter(window_start)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Distinct openings observed",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 12 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT eco) AS openings FROM opening_trends WHERE $__timeFilter(window_start)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Top openings overall",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "chessdb-postgres"
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 12 },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "chessdb-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT eco AS \"ECO\", COALESCE(MAX(opening_name), '?') AS \"Opening\", SUM(game_count) AS \"Games\" FROM opening_trends WHERE $__timeFilter(window_start) GROUP BY eco ORDER BY SUM(game_count) DESC LIMIT $topn"
+        }
+      ]
+    }
+  ]
+}
