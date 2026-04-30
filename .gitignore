@@ -3,5 +3,4 @@ data/*
 __pycache__/
 execs
 phase0*
-.claude
-.claude_cache
+.claude/*
