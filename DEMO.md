@@ -31,30 +31,26 @@ Run these *before* the audience walks in. If anything fails, see "Recovery" at t
 # 1.1  All 14 containers healthy
 docker compose ps
 
-# 1.2  Three streaming jobs alive
-docker exec big-data-project-lichess-spark-master-1 sh -c \
-  "ps -ef | grep -v grep | grep -E 'elo_tracker.py|opening_trends.py|leaderboard.py' | wc -l"
-# expect: 9   (3 wrapper sh + 3 java SparkSubmit + 3 python3 drivers)
+# 1.2  Five streaming jobs alive
+docker exec big-data-project-lichess-spark-master-1 sh -c "ps -ef | grep -v grep | grep -E 'elo_tracker.py|opening_trends.py|leaderboard.py|live_activity.py|live_featured.py' | wc -l"
+# expect: 15   (5 wrapper sh + 5 java SparkSubmit + 5 python3 drivers)
 
 # 1.3  Kafka topics exist
-docker exec big-data-project-lichess-kafka-1 kafka-topics \
-  --bootstrap-server kafka:9092 --list
+docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 --list
 # expect: game-results, game-moves, player-events, tourn-events
 
 # 1.4  Postgres has data
-docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c "
-  SELECT 'elo_history' AS t, COUNT(*) FROM elo_history UNION ALL
-  SELECT 'opening_trends', COUNT(*) FROM opening_trends UNION ALL
-  SELECT 'tournament_leaderboard', COUNT(*) FROM tournament_leaderboard UNION ALL
-  SELECT 'opening_clusters', COUNT(*) FROM opening_clusters UNION ALL
-  SELECT 'player_styles', COUNT(*) FROM player_styles UNION ALL
-  SELECT 'als_vectors', COUNT(*) FROM als_vectors;"
+docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c "SELECT 'elo_history' AS t, COUNT(*) FROM elo_history UNION ALL SELECT 'opening_trends', COUNT(*) FROM opening_trends UNION ALL SELECT 'tournament_leaderboard', COUNT(*) FROM tournament_leaderboard UNION ALL SELECT 'opening_clusters', COUNT(*) FROM opening_clusters UNION ALL SELECT 'player_styles', COUNT(*) FROM player_styles UNION ALL SELECT 'als_vectors', COUNT(*) FROM als_vectors UNION ALL SELECT 'live_activity', COUNT(*) FROM live_activity UNION ALL SELECT 'game_lengths', COUNT(*) FROM game_lengths UNION ALL SELECT 'featured_players', COUNT(*) FROM featured_players;"
 
 # 1.5  Cassandra has data
-docker exec big-data-project-lichess-cassandra-1 cqlsh -e "
-  SELECT count(*) FROM chess.elo_history;
-  SELECT count(*) FROM chess.tournament_standings;"
+docker exec big-data-project-lichess-cassandra-1 cqlsh -e "SELECT count(*) FROM chess.elo_history; SELECT count(*) FROM chess.tournament_standings;"
+
+# 1.6  Metabase reachable + ChessDB datasource present
+bash metabase/setup.sh
+# expect: "[metabase] already initialised; ChessDB datasource present."
 ```
+
+> **PowerShell users:** every command in this doc is a single line. Bash uses `\` for line continuation, PowerShell uses backtick `` ` ``. To stay portable across both shells, this guide keeps every command on one line.
 
 Expected ballpark numbers (after our test runs):
 
@@ -66,6 +62,9 @@ Expected ballpark numbers (after our test runs):
 | `opening_clusters` | 287 |
 | `player_styles` | ~3 800 |
 | `als_vectors` | ~3 800 |
+| `live_activity` | grows ~1/min while live producer runs |
+| `game_lengths` | grows as new featured games arrive |
+| `featured_players` | grows as Lichess TV rotates games |
 
 ---
 
@@ -76,10 +75,11 @@ Expected ballpark numbers (after our test runs):
 | Kafka UI | http://localhost:8080 | none |
 | Spark Master UI | http://localhost:8090 | none |
 | Grafana | http://localhost:3000 | `admin` / `admin123` |
+| Metabase | http://localhost:3003 | `admin@chess.local` / `Chess123!` |
 | Elasticsearch | http://localhost:9200 | none |
 | Kibana (search UI) | http://localhost:5601 | none |
 
-Open all five in tabs before the demo so you can switch fast.
+Open all six in tabs before the demo so you can switch fast.
 
 ---
 
@@ -122,13 +122,18 @@ Switch back to Kafka UI → `game-moves` → refresh: messages arrive in real ti
 
 ### Step 4 — Show stream processing in Spark UI (2 min)
 
-Open **Spark Master UI** at http://localhost:8090. Show the three running applications:
+Open **Spark Master UI** at http://localhost:8090. Show the **five** running applications:
 
+**Batch-side consumers (read from `game-results` / `tourn-events`):**
 - `elo_tracker` — "stateless Structured Streaming; explodes each game into 2 player rows and dual-sinks to both Cassandra and Postgres."
 - `opening_trends` — "5-minute tumbling-window aggregation with a 5-minute watermark. Counts games per ECO."
 - `tournament_leaderboard` — "stateful aggregation grouped by `(tournament_id, player_id)`. Uses `outputMode('update')` so only changed standings are flushed each trigger."
 
-Mention the 4-core constraint: "We have 4 cores, 3 streaming jobs, so each is capped at 1 core in the submit scripts. Batch jobs use all 4 — but we pause streaming first."
+**Live-side consumers (read from `game-moves` / `player-events`):**
+- `live_activity` — "two streaming queries in one Spark app — a 1-min tumbling window for throughput, plus per-game running move counts with a 10-min watermark."
+- `live_featured` — "stateless; each `t=featured` event becomes one upsert into `featured_players`."
+
+Mention the resource sizing: "6 cores total (2 workers × 3 cores), 5 streaming jobs each capped at `spark.cores.max=1` and `spark.executor.memory=512m` so they all fit. Batch jobs (when run) get the rest after we pause streaming."
 
 ### Step 5 — Walk the four Grafana dashboards (5-7 min)
 
@@ -163,6 +168,69 @@ Open **Grafana** at http://localhost:3000 (`admin` / `admin123`) → **Dashboard
 - **Recommendations for $player**: pick a player → ALS top-10 ECO recommendations with cluster annotation.
 
 *Talk track*: "Three batch ML jobs. K-Means clusters the 287 ECO codes by features like white-win-rate and average ELO. Player styles aggregates per-player metrics across 3782 players. ALS does collaborative filtering — `(player, ECO, play count)` matrix, rank-20, implicit-feedback model — and produces personalized opening recommendations. Each player's recommendations are unique."
+
+### Step 5b — Switch to Metabase for live + cross-table views (3-5 min)
+
+Before opening the tab, **start the live producer** in another terminal so the live-side tables grow on screen during the demo:
+
+```powershell
+.\.venv\Scripts\python.exe -m ingestion.stream_producer.main --bootstrap localhost:29092 --max-reconnects -1
+```
+
+Open **Metabase** at http://localhost:3003 → log in with `admin@chess.local` / `Chess123!` → **Browse Data** → **ChessDB**.
+
+*Talk track*: "Grafana is the operator view — real-time time series. Metabase is the analyst view — SQL questions, joins across tables, easier exploration. Both read the same Postgres datasource. The setup is fully automated by `metabase/setup.sh`: it hits Metabase's `/api/setup` endpoint to create the admin user and add the ChessDB connection."
+
+**Dashboard 1 — Live Stream:**
+
+Click "+ New" → "SQL query" → ChessDB → paste these one at a time. Save each to a dashboard called "Live Stream".
+
+```sql
+-- Throughput line chart
+SELECT window_start AS time, moves_count
+FROM live_activity ORDER BY window_start;
+
+-- Active games gauge
+SELECT active_games FROM live_activity ORDER BY window_start DESC LIMIT 1;
+
+-- Featured players table
+SELECT featured_at, white_player, white_rating, black_player, black_rating
+FROM featured_players ORDER BY featured_at DESC LIMIT 20;
+
+-- Featured-player rating distribution
+SELECT (white_rating + black_rating) / 2 AS avg_rating FROM featured_players;
+
+-- Game-length histogram
+SELECT move_count FROM game_lengths WHERE move_count > 5;
+```
+
+*Talk track*: "Featured-player ratings cluster around 2700-3100 because Lichess TV picks top live games. Game-length histogram shows blitz games skewing under 60 moves. The throughput line chart updates as the live producer feeds new events into Kafka and `live_activity` flushes each 1-min window."
+
+**Dashboard 2 — Cross-table analytics:**
+
+This is what Metabase does better than Grafana — joins across tables.
+
+```sql
+-- Top-15 aggressive players × their #1 ALS recommendation
+SELECT ps.player_id,
+       round(ps.aggression_index::numeric, 3) AS aggression,
+       (av.factors->0->>'eco') AS top_rec_eco,
+       oc.cluster_label AS top_rec_cluster
+FROM player_styles ps
+JOIN als_vectors av USING (player_id)
+LEFT JOIN opening_clusters oc ON oc.eco_code = av.factors->0->>'eco'
+ORDER BY ps.aggression_index DESC
+LIMIT 15;
+
+-- Games-per-cluster (joining stream output + batch output)
+SELECT oc.cluster_label, SUM(ot.game_count) AS games
+FROM opening_trends ot
+JOIN opening_clusters oc ON oc.eco_code = ot.eco
+GROUP BY oc.cluster_label
+ORDER BY 2 DESC;
+```
+
+*Talk track*: "Notice how the second query joins stream-job output (`opening_trends`) with batch-job output (`opening_clusters`) on `eco`. The pipeline produces a unified Postgres view that lets us answer questions neither layer could answer alone — that's the point of polyglot persistence with a relational reporting cache."
 
 ### Step 6 — Inspect raw storage (3 min)
 
@@ -232,12 +300,10 @@ curl http://localhost:9200/_cat/indices
 
 ```bash
 # End offsets per topic
-docker exec big-data-project-lichess-kafka-1 \
-  kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka:9092 --topic game-results
+docker exec big-data-project-lichess-kafka-1 kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka:9092 --topic game-results
 
 # Tail one topic live (Ctrl+C to exit)
-docker exec -it big-data-project-lichess-kafka-1 \
-  kafka-console-consumer --bootstrap-server kafka:9092 --topic game-moves --from-beginning --max-messages 3
+docker exec -it big-data-project-lichess-kafka-1 kafka-console-consumer --bootstrap-server kafka:9092 --topic game-moves --from-beginning --max-messages 3
 ```
 
 ### Step 7 — Run a batch job live (optional, 2 min)
@@ -254,8 +320,7 @@ docker exec big-data-project-lichess-spark-master-1 pkill -9 -f leaderboard.py
 bash batch_processing/kmeans_openings/submit.sh
 
 # Verify
-docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c \
-  "SELECT cluster_label, COUNT(*) FROM opening_clusters GROUP BY cluster_label;"
+docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c "SELECT cluster_label, COUNT(*) FROM opening_clusters GROUP BY cluster_label;"
 
 # Restart streaming jobs
 bash stream_processing/elo_tracker/submit.sh
@@ -273,11 +338,8 @@ Skip this for the actual presentation — it takes ~3 min. Useful for rehearsals
 
 ```bash
 # 4.1  Clear everything
-docker exec big-data-project-lichess-cassandra-1 cqlsh -e \
-  "TRUNCATE chess.elo_history; TRUNCATE chess.tournament_standings;"
-docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c \
-  "TRUNCATE elo_history; TRUNCATE opening_trends; TRUNCATE tournament_leaderboard;
-   TRUNCATE opening_clusters; TRUNCATE player_styles; TRUNCATE als_vectors;"
+docker exec big-data-project-lichess-cassandra-1 cqlsh -e "TRUNCATE chess.elo_history; TRUNCATE chess.tournament_standings;"
+docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c "TRUNCATE elo_history; TRUNCATE opening_trends; TRUNCATE tournament_leaderboard; TRUNCATE opening_clusters; TRUNCATE player_styles; TRUNCATE als_vectors;"
 docker exec big-data-project-lichess-spark-master-1 sh -c "rm -rf /tmp/checkpoints/*"
 
 # 4.2  Confirm streaming jobs are running (restart if needed)
@@ -292,10 +354,7 @@ bash stream_processing/tournament_leaderboard/submit.sh
   --rate 800 --max-games 10000
 
 # 4.4  Wait 30-60 s for streams to flush, then verify
-docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c \
-  "SELECT COUNT(*) FROM elo_history;
-   SELECT COUNT(*) FROM opening_trends;
-   SELECT COUNT(*) FROM tournament_leaderboard;"
+docker exec big-data-project-lichess-postgres-1 psql -U chess -d chessdb -c "SELECT COUNT(*) FROM elo_history; SELECT COUNT(*) FROM opening_trends; SELECT COUNT(*) FROM tournament_leaderboard;"
 
 # 4.5  Pause streams, run all batch jobs (re-fills opening_clusters / player_styles / als_vectors)
 docker exec big-data-project-lichess-spark-master-1 pkill -9 -f opening_trends.py
@@ -379,15 +438,22 @@ When asked "what's next" or "what would you build given more time":
 ### A streaming job died
 
 ```bash
-# Check
-docker exec big-data-project-lichess-spark-master-1 sh -c \
-  "ps -ef | grep -v grep | grep -E 'elo_tracker.py|opening_trends.py|leaderboard.py'"
+# Check (expect 15 processes = 5 streams × 3 each)
+docker exec big-data-project-lichess-spark-master-1 sh -c "ps -ef | grep -v grep | grep -E 'elo_tracker.py|opening_trends.py|leaderboard.py|live_activity.py|live_featured.py'"
 
 # Restart whichever is missing
 bash stream_processing/elo_tracker/submit.sh
 bash stream_processing/opening_trends/submit.sh
 bash stream_processing/tournament_leaderboard/submit.sh
+bash stream_processing/live_activity/submit.sh
+bash stream_processing/live_featured/submit.sh
 ```
+
+### Live producer / Metabase tables empty
+
+- `live_activity`, `game_lengths`, `featured_players` are only populated while the live producer is running. Start it: `.\.venv\Scripts\python.exe -m ingestion.stream_producer.main --bootstrap localhost:29092 --max-reconnects -1`.
+- Wait at least 90 s for the first 1-min window to flush.
+- If Metabase login fails, run `bash metabase/setup.sh` — it's idempotent. If creds in `.env` don't match what's already in Metabase, blow away the `metabase_db_data` volume (`docker compose down metabase metabase-db -v` then `up -d`) and re-run setup.
 
 ### Grafana shows "no data"
 
@@ -402,14 +468,10 @@ The piechart `reduceOptions` must be `{"calcs":["lastNotNull"], "fields":"", "va
 ### Kafka topic is missing after a restart
 
 ```bash
-docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 \
-  --create --if-not-exists --topic game-results --partitions 3 --replication-factor 1
-docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 \
-  --create --if-not-exists --topic game-moves --partitions 6 --replication-factor 1
-docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 \
-  --create --if-not-exists --topic player-events --partitions 3 --replication-factor 1
-docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 \
-  --create --if-not-exists --topic tourn-events --partitions 3 --replication-factor 1
+docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic game-results --partitions 3 --replication-factor 1
+docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic game-moves --partitions 6 --replication-factor 1
+docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic player-events --partitions 3 --replication-factor 1
+docker exec big-data-project-lichess-kafka-1 kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic tourn-events --partitions 3 --replication-factor 1
 ```
 
 ### Postgres `init.sql` schema didn't apply

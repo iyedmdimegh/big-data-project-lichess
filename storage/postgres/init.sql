@@ -88,3 +88,42 @@ CREATE TABLE IF NOT EXISTS tournament_leaderboard (
 
 CREATE INDEX IF NOT EXISTS idx_tournament_leaderboard_points
     ON tournament_leaderboard (tournament_id, points DESC);
+
+-- Stream output: 1-minute throughput windows from the Lichess TV move stream.
+-- One row per minute, upserted as windows finalize.
+CREATE TABLE IF NOT EXISTS live_activity (
+    window_start  TIMESTAMP   PRIMARY KEY,
+    window_end    TIMESTAMP   NOT NULL,
+    moves_count   INT         NOT NULL,
+    active_games  INT         NOT NULL
+);
+
+-- Stream output: per-game running move count from the Lichess TV move stream.
+-- Updated as moves arrive; may be incomplete while a game is still in progress.
+CREATE TABLE IF NOT EXISTS game_lengths (
+    game_id       VARCHAR     PRIMARY KEY,
+    move_count    INT         NOT NULL,
+    first_seen    TIMESTAMP   NOT NULL,
+    last_seen     TIMESTAMP   NOT NULL,
+    duration_sec  INT GENERATED ALWAYS AS
+        (EXTRACT(EPOCH FROM (last_seen - first_seen))::int) STORED
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_lengths_last_seen
+    ON game_lengths (last_seen DESC);
+
+-- Stream output: featured-game snapshots from Lichess TV.
+-- One row per featured event; PK upserts on game re-feature.
+CREATE TABLE IF NOT EXISTS featured_players (
+    game_id        VARCHAR     PRIMARY KEY,
+    featured_at    TIMESTAMP   NOT NULL,
+    white_player   VARCHAR,
+    white_title    VARCHAR,
+    white_rating   INT,
+    black_player   VARCHAR,
+    black_title    VARCHAR,
+    black_rating   INT
+);
+
+CREATE INDEX IF NOT EXISTS idx_featured_players_featured_at
+    ON featured_players (featured_at DESC);

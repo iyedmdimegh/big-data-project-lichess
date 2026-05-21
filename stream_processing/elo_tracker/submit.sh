@@ -13,6 +13,7 @@ docker exec -d spark-master /opt/bitnami/spark/bin/spark-submit \
   --conf spark.jars.ivy=/tmp/.ivy2 \
   --conf spark.cores.max=1 \
   --conf spark.executor.cores=1 \
+  --conf spark.executor.memory=512m \
   --conf spark.cassandra.connection.host=cassandra \
   --conf spark.cassandra.connection.port=9042 \
   --conf spark.sql.extensions=com.datastax.spark.connector.CassandraSparkExtensions \

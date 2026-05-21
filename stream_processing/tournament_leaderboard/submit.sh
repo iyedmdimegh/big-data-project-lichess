@@ -10,6 +10,7 @@ docker exec -d big-data-project-lichess-spark-master-1 sh -c \
      --conf spark.jars.ivy=/tmp/.ivy2 \
      --conf spark.cores.max=1 \
      --conf spark.executor.cores=1 \
+     --conf spark.executor.memory=512m \
      --conf spark.cassandra.connection.host=cassandra \
      --conf spark.sql.extensions=com.datastax.spark.connector.CassandraSparkExtensions \
      /opt/spark-apps/stream_processing/tournament_leaderboard/leaderboard.py \
