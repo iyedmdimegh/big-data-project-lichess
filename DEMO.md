@@ -76,6 +76,8 @@ Expected ballpark numbers (after our test runs):
 | Spark Master UI | http://localhost:8090 | none |
 | Grafana | http://localhost:3000 | `admin` / `admin123` |
 | Metabase | http://localhost:3003 | `admin@chess.local` / `Chess123!` |
+| Metabase (Cassandra via Presto) | http://localhost:3004 | `admin@chess-cassandra.local` / `Chess123!` |
+| Presto query UI | http://localhost:8081 | none |
 | Elasticsearch | http://localhost:9200 | none |
 | Kibana (search UI) | http://localhost:5601 | none |
 
@@ -168,6 +170,35 @@ Open **Grafana** at http://localhost:3000 (`admin` / `admin123`) → **Dashboard
 - **Recommendations for $player**: pick a player → ALS top-10 ECO recommendations with cluster annotation.
 
 *Talk track*: "Three batch ML jobs. K-Means clusters the 287 ECO codes by features like white-win-rate and average ELO. Player styles aggregates per-player metrics across 3782 players. ALS does collaborative filtering — `(player, ECO, play count)` matrix, rank-20, implicit-feedback model — and produces personalized opening recommendations. Each player's recommendations are unique."
+
+### Step 5c — Metabase #2 reads Cassandra via Presto (2 min, optional but strong)
+
+This is the answer to the "Cassandra is a write-only sink" critique. We added
+a **second Metabase instance** (port 3004) that talks to **PrestoDB**, which
+in turn reads **Cassandra**. So now Cassandra is being read by an actual
+visualization tool, end-to-end.
+
+Open http://localhost:3004 → log in with `admin@chess-cassandra.local` /
+`Chess123!` → **+ New** → **SQL query** → pick **ChessCassandra** → paste:
+
+```sql
+SELECT COUNT(*) AS rows FROM chess.elo_history;
+SELECT player_id, recorded_at, elo, delta
+FROM chess.elo_history
+WHERE player_id = 'microcommega'
+ORDER BY recorded_at DESC LIMIT 10;
+```
+
+The first query returns ~20000. The second returns one player's full ELO
+history — read straight from Cassandra, no Postgres involved.
+
+*Talk track*: "This second Metabase instance proves Cassandra isn't a dead
+write-only sink — it has a real read path through Presto. Presto is a
+distributed SQL engine that translates SQL into Cassandra's native protocol.
+The query you just ran went: Metabase → Presto JDBC → Presto → Cassandra
+native driver → Cassandra → back. We kept it as a separate Metabase
+instance so any plugin or driver weirdness doesn't break the main analytics
+Metabase."
 
 ### Step 5b — Switch to Metabase for live + cross-table views (3-5 min)
 

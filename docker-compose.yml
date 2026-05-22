@@ -250,6 +250,72 @@ services:
     networks:
       - chess-net
 
+  # ─── EXPERIMENTAL: Cassandra-backed Metabase via Trino ──────────────────
+  # Separate instance + separate metadata DB so the working metabase instance
+  # above is unaffected if this fails.
+
+  trino:
+    # PrestoDB (the original) — chosen over Trino because Metabase's bundled
+    # `presto-jdbc` driver uses the legacy Facebook Presto protocol that Trino
+    # 350+ rejects with HTTP 401. Same Cassandra connector, same SQL surface
+    # for our purposes; the protocol is the only thing that differs.
+    image: prestodb/presto:0.286
+    restart: unless-stopped
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./trino/etc/catalog:/opt/presto-server/etc/catalog:ro
+    ports:
+      - "${TRINO_PORT}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info | grep -q '\"starting\":false' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks:
+      - chess-net
+
+  metabase-trino-db:
+    image: postgres:${POSTGRES_VERSION}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MB_TRINO_DB_USER}
+      POSTGRES_PASSWORD: ${MB_TRINO_DB_PASS}
+      POSTGRES_DB: ${MB_TRINO_DB_DBNAME}
+    volumes:
+      - metabase_trino_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MB_TRINO_DB_USER} -d ${MB_TRINO_DB_DBNAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - chess-net
+
+  metabase-trino:
+    image: metabase/metabase:${METABASE_VERSION}
+    restart: unless-stopped
+    depends_on:
+      metabase-trino-db:
+        condition: service_healthy
+      trino:
+        condition: service_started
+    environment:
+      MB_JETTY_PORT: ${METABASE_TRINO_PORT}
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: metabase-trino-db
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: ${MB_TRINO_DB_DBNAME}
+      MB_DB_USER: ${MB_TRINO_DB_USER}
+      MB_DB_PASS: ${MB_TRINO_DB_PASS}
+    ports:
+      - "${METABASE_TRINO_PORT}:${METABASE_TRINO_PORT}"
+    networks:
+      - chess-net
+
 volumes:
   zookeeper_data:
   zookeeper_log:
@@ -257,6 +323,7 @@ volumes:
   cassandra_data:
   postgres_data:
   metabase_db_data:
+  metabase_trino_db_data:
   elasticsearch_data:
   grafana_data:
 
